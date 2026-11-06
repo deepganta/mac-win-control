@@ -71,16 +71,20 @@ foreach ($f in @($recv, $watch)) {
   if (-not (Test-Path $f)) { throw "missing $f - keep the transfer folder together." }
 }
 
-$job = Start-Job -Name macWinReceive -ScriptBlock {
-  param($script, $port, $dir, $token)
-  & powershell -NoProfile -ExecutionPolicy Bypass -File $script -Port $port -Dir $dir -Token $token
-} -ArgumentList $recv, $Port, $fromMac, $token
+# One-time plumbing (firewall rule + urlacl) so the listener is allowed to bind.
+& powershell -NoProfile -ExecutionPolicy Bypass -File $recv -Port $Port -Token $token -Install | Out-Null
+
+# The receiver gets its own window so its output and any error stay visible.
+Write-Host "  Starting the receiver in a second window..." -ForegroundColor DarkGray
+$recvProc = Start-Process powershell -PassThru -ArgumentList @(
+  "-NoExit", "-NoProfile", "-ExecutionPolicy", "Bypass",
+  "-File", "`"$recv`"", "-Port", $Port, "-Dir", "`"$fromMac`"", "-Token", $token
+)
 
 try {
   & powershell -NoProfile -ExecutionPolicy Bypass -File $watch -To $To -Port $Port -Dir $toMac -Token $token
 }
 finally {
-  Write-Host "  stopping..." -ForegroundColor DarkGray
-  Stop-Job $job -ErrorAction SilentlyContinue
-  Remove-Job $job -Force -ErrorAction SilentlyContinue
+  Write-Host "  stopping receiver..." -ForegroundColor DarkGray
+  if ($recvProc -and -not $recvProc.HasExited) { Stop-Process -Id $recvProc.Id -Force -ErrorAction SilentlyContinue }
 }

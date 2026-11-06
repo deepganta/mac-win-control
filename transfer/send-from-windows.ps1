@@ -39,8 +39,9 @@ if (-not $Token) {
   $Token = (Get-Content $tokenFile -Raw).Trim()
 }
 
-$client = [System.Net.Http.HttpClient]::new()
-$client.Timeout = [TimeSpan]::FromMinutes(10)
+# WebClient rather than HttpClient: Windows PowerShell 5.1 does not load
+# System.Net.Http by default.
+$wc = New-Object System.Net.WebClient
 $fail = 0
 
 foreach ($f in $Files) {
@@ -48,25 +49,16 @@ foreach ($f in $Files) {
   $item = Get-Item $f
   if ($item.PSIsContainer) { Write-Host "skipping folder: $f (zip it first)" -ForegroundColor Yellow; $fail++; continue }
 
-  $content = [System.Net.Http.ByteArrayContent]::new([System.IO.File]::ReadAllBytes($item.FullName))
-  $content.Headers.Add("X-Token", $Token)
-  $content.Headers.Add("X-Filename", [System.Uri]::EscapeDataString($item.Name))
-
   try {
-    $resp = $client.PostAsync("http://$To`:$Port/upload", $content).Result
-    if ($resp.IsSuccessStatusCode) {
-      Write-Host "sent $($item.Name) -> $To" -ForegroundColor Green
-    } else {
-      Write-Host "FAILED $($item.Name): $([int]$resp.StatusCode)" -ForegroundColor Red
-      $fail++
-    }
+    $wc.Headers.Set("X-Token", $Token)
+    $wc.Headers.Set("X-Filename", [System.Uri]::EscapeDataString($item.Name))
+    [void]$wc.UploadData("http://$To`:$Port/upload", "POST", [System.IO.File]::ReadAllBytes($item.FullName))
+    Write-Host "sent $($item.Name) -> $To" -ForegroundColor Green
   }
   catch {
     Write-Host "FAILED $($item.Name): $($_.Exception.Message)" -ForegroundColor Red
     $fail++
   }
-  finally { $content.Dispose() }
 }
 
-$client.Dispose()
 exit $fail

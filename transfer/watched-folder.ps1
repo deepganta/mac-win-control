@@ -45,9 +45,11 @@ Write-Host "    $Dir"
 Write-Host "  Sending to ${To}:$Port. Leave this window open."
 Write-Host ""
 
-$client = [System.Net.Http.HttpClient]::new()
-$client.Timeout = [TimeSpan]::FromMinutes(30)
+# WebClient rather than HttpClient: Windows PowerShell 5.1 does not load
+# System.Net.Http by default, and this has to work on a plain Windows box.
+$wc = New-Object System.Net.WebClient
 $sent = @{}
+$failedAt = @{}
 $prev = @{}
 
 while ($true) {
@@ -60,23 +62,19 @@ while ($true) {
   foreach ($name in $cur.Keys) {
     if (-not $prev.ContainsKey($name) -or $prev[$name] -ne $cur[$name]) { continue }
     if ($sent.ContainsKey($name) -and $sent[$name] -eq $cur[$name]) { continue }
+    if ($failedAt.ContainsKey($name) -and ((Get-Date) - $failedAt[$name]).TotalSeconds -lt 10) { continue }
 
     $file = Join-Path $Dir $name
     try {
       $bytes = [System.IO.File]::ReadAllBytes($file)
-      $content = [System.Net.Http.ByteArrayContent]::new($bytes)
-      $content.Headers.Add("X-Token", $Token)
-      $content.Headers.Add("X-Filename", [System.Uri]::EscapeDataString($name))
-      $resp = $client.PostAsync("http://$To`:$Port/upload", $content).Result
-      $content.Dispose()
-      if ($resp.IsSuccessStatusCode) {
-        $sent[$name] = $cur[$name]
-        Write-Host "sent $name ($($bytes.Length) bytes) -> ${To}" -ForegroundColor Green
-      } else {
-        Write-Host "FAILED $name : $([int]$resp.StatusCode)" -ForegroundColor Red
-      }
+      $wc.Headers.Set("X-Token", $Token)
+      $wc.Headers.Set("X-Filename", [System.Uri]::EscapeDataString($name))
+      [void]$wc.UploadData("http://$To`:$Port/upload", "POST", $bytes)
+      $sent[$name] = $cur[$name]
+      Write-Host "sent $name ($($bytes.Length) bytes) -> ${To}" -ForegroundColor Green
     }
     catch {
+      $failedAt[$name] = Get-Date
       Write-Host "FAILED $name : $($_.Exception.Message)" -ForegroundColor Red
     }
   }
